@@ -6,7 +6,11 @@ services:
     restart: unless-stopped
     environment:
       SIGNUPS_ALLOWED: "false"
+      DOMAIN: "https://localhost:4280"
+      # The web vault refuses plain http (even on localhost); ./backup.sh creates the cert.
+      ROCKET_TLS: '{certs="/ssl/cert.pem",key="/ssl/key.pem"}'
     ports:
       - "127.0.0.1:4280:80"
     volumes:
       - ./data:/data
+      - ./certs:/ssl:ro

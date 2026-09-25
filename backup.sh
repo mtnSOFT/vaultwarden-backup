@@ -7,6 +7,7 @@ set -euo pipefail
 BACKUP_DIR=backups
 LOCAL_COMPOSE=compose.yml
 LOCAL_DATA_DIR=data
+LOCAL_CERT_DIR=certs
 # Matches the (optionally quoted) image value of an `image:` line referencing vaultwarden.
 IMAGE_LINE_RE="^([[:space:]]*image:[[:space:]]*)[\"']?([^\"'[:space:]]*vaultwarden[^\"'[:space:]]*)[\"']?"
 
@@ -140,6 +141,24 @@ update_local_compose() {
 
 local_compose() { docker compose -f "$LOCAL_COMPOSE" "$@" >&2; }
 
+# The web vault only accepts https, so the local instance needs a certificate
+# for localhost. mkcert's is trusted by the browser (after a one-time
+# `mkcert -install`); the openssl fallback is self-signed.
+ensure_local_cert() {
+  local cert="$LOCAL_CERT_DIR/cert.pem" key="$LOCAL_CERT_DIR/key.pem"
+  [[ -f $cert && -f $key ]] && return
+  mkdir -p "$LOCAL_CERT_DIR"
+  if command -v mkcert >/dev/null; then
+    log "Creating localhost certificate with mkcert"
+    mkcert -cert-file "$cert" -key-file "$key" localhost 127.0.0.1 >&2
+  else
+    log "Creating self-signed localhost certificate (install mkcert for a trusted one)"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj /CN=localhost \
+      -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+      -keyout "$key" -out "$cert" 2>/dev/null
+  fi
+}
+
 # Swap the backup in with the local instance stopped, then (re)start it; `up`
 # also recreates the container when update_local_compose changed the image.
 run_local_instance() {
@@ -160,7 +179,7 @@ local_port() {
 
 print_summary() {
   printf '\nBackup succeeded: %s\n' "$1"
-  printf 'Local vaultwarden is running it at http://localhost:%s — log in with your usual account.\n' "$(local_port)"
+  printf 'Local vaultwarden is running it at https://localhost:%s — log in with your usual account.\n' "$(local_port)"
 }
 
 # Keep the newest $KEEP backups. Names start with a timestamp, so lexical
@@ -188,6 +207,7 @@ main() {
 
   backup=$(download_backup "$(field cid "$info")" "$(field data_dir "$info")" "$(image_version "$image")")
   update_local_compose "$image"
+  ensure_local_cert
   run_local_instance "$backup"
   rotate_backups
   print_summary "$backup"

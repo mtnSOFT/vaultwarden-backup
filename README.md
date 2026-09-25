@@ -12,12 +12,13 @@ Each run of `./backup.sh`:
 4. stops the local vaultwarden, puts the new DB into `data/db.sqlite3` and starts it again,
 5. keeps only the newest 5 backups.
 
-When it's done, the local copy is at <http://localhost:4280>. Log in with your usual account.
+When it's done, the local copy is at <https://localhost:4280>. Log in with your usual account.
 
 ## Requirements
 
 **Local:** bash, ssh with key-based login to the server (the script runs non-interactively), docker with compose v2.
 `sqlite3` is optional; if installed, every download gets an integrity check.
+`mkcert` is optional too; see [HTTPS](#https).
 
 **Server:** vaultwarden with SQLite, run via docker compose. The SSH user needs docker access,
 either via the `docker` group or passwordless sudo (see `REMOTE_SUDO`).
@@ -57,4 +58,16 @@ To run it daily, e.g. via cron:
 - Only the database is backed up. Attachments and Sends stored in the server's data folder are not included.
 - The local instance is overwritten on every run, so changes made there get lost. The files in `backups/` are never modified.
 - Don't edit the image tag in `compose.yml` by hand; the script sets it on every run.
-- The web vault works over plain `http` on `localhost`, so no certificate is needed.
+
+## HTTPS
+
+The Bitwarden web vault refuses to log in over plain `http`, even on `localhost`
+("Insecure URL not allowed. All URLs must use HTTPS."). So the local vaultwarden serves HTTPS itself,
+with a certificate in `certs/` (gitignored) that the script creates on the first run:
+
+- **With [mkcert](https://github.com/FiloSottile/mkcert)** installed, the certificate is trusted by your browser.
+  Run `mkcert -install` once beforehand.
+- **Without it**, a self-signed certificate is created. Your browser warns on the first visit;
+  accept the warning to continue.
+
+To switch from the self-signed certificate to mkcert later, delete `certs/` and run `./backup.sh` again.
