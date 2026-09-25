@@ -1,0 +1,12 @@
+# Local vaultwarden to browse the latest backup.
+# The image tag is kept in sync with the remote by ./backup.sh — don't edit it by hand.
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.37.1
+    restart: unless-stopped
+    environment:
+      SIGNUPS_ALLOWED: "false"
+    ports:
+      - "127.0.0.1:4280:80"
+    volumes:
+      - ./data:/data
