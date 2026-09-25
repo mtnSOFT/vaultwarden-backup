@@ -7,9 +7,10 @@ Each run of `./backup.sh`:
 1. finds the running vaultwarden container on the server via SSH,
 2. creates a consistent snapshot with vaultwarden's built-in `backup` command
    (falls back to `sqlite3 .backup` on the host for vaultwarden < 1.32) and downloads it to `backups/`,
+   together with the `attachments/` and `sends/` folders,
 3. pins the image in the local `compose.yml` to the exact version the server runs
    (`latest` / `alpine` tags are resolved to the running version),
-4. stops the local vaultwarden, puts the new DB into `data/db.sqlite3` and starts it again,
+4. stops the local vaultwarden, puts the new DB, attachments and sends into `data/` and starts it again,
 5. keeps only the newest 5 backups.
 
 When it's done, the local copy is at <https://localhost:4280>. Log in with your usual account.
@@ -44,8 +45,15 @@ Then set in `.env` (gitignored):
 ./backup.sh
 ```
 
-Backups are stored as `backups/db_<YYYYmmdd_HHMMSS>_<version>.sqlite3`, so each file shows
-which vaultwarden version wrote it.
+Each backup is a folder named `backups/backup_<YYYYmmdd_HHMMSS>_<version>/`, so it shows
+which vaultwarden version wrote it:
+
+```text
+backup_20260925_200915_1.37.1/
+├── db.sqlite3
+├── attachments/   (only if the server has any)
+└── sends/         (only if the server has any)
+```
 
 To run it daily, e.g. via cron:
 
@@ -55,7 +63,9 @@ To run it daily, e.g. via cron:
 
 ## Good to know
 
-- Only the database is backed up. Attachments and Sends stored in the server's data folder are not included.
+- Only the database, attachments and sends are backed up. Server settings such as `config.json` (admin panel)
+  are left out on purpose, so they can't override the local setup.
+- Every backup holds a full copy of the attachments, so with many large attachments `backups/` grows by that much per backup.
 - The local instance is overwritten on every run, so changes made there get lost. The files in `backups/` are never modified.
 - Don't edit the image tag in `compose.yml` by hand; the script sets it on every run.
 

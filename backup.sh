@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Fetch the latest vaultwarden SQLite DB from the remote host via SSH,
+# Fetch the latest vaultwarden SQLite DB, attachments and sends from the remote host via SSH,
 # pin the local compose.yml to the remote's vaultwarden version,
 # and keep only the newest $KEEP backups.
 set -euo pipefail
+shopt -s inherit_errexit
 
 BACKUP_DIR=backups
 LOCAL_COMPOSE=compose.yml
 LOCAL_DATA_DIR=data
 LOCAL_CERT_DIR=certs
+# Folders below /data that hold uploaded files referenced by the DB.
+FILE_DIRS=(attachments sends)
 # Matches the (optionally quoted) image value of an `image:` line referencing vaultwarden.
 IMAGE_LINE_RE="^([[:space:]]*image:[[:space:]]*)[\"']?([^\"'[:space:]]*vaultwarden[^\"'[:space:]]*)[\"']?"
 
@@ -80,6 +83,21 @@ cat "$tmp"
 EOF
 }
 
+# Stream a tar of those of the folders $2... below /data of container $1 that exist
+# (nothing if none do) to stdout.
+remote_files() {
+  remote "$@" <<'EOF'
+set -eu
+cid=$1
+shift
+existing=""
+for d; do
+  if docker exec "$cid" test -d "/data/$d"; then existing="$existing $d"; fi
+done
+[ -z "$existing" ] || docker exec "$cid" tar -C /data -cf - $existing
+EOF
+}
+
 # Print image $1 pinned to a concrete version: a versioned tag is kept as-is,
 # otherwise (latest, alpine, no tag, ...) the tag is replaced by version $2.
 pin_image() {
@@ -111,18 +129,23 @@ verify_sqlite() {
   fi
 }
 
-# Download a snapshot of container $1 (data dir $2) as version $3; print its path.
+# Download a snapshot of container $1 (data dir $2) as version $3; print its directory.
 download_backup() {
-  local target tmp
-  mkdir -p "$BACKUP_DIR"
-  target="$BACKUP_DIR/db_$(date +%Y%m%d_%H%M%S)_$3.sqlite3"
-  tmp="$target.part"
-  trap "rm -f $(printf %q "$tmp")" EXIT
+  local stamp target tmp
+  stamp=$(date +%Y%m%d_%H%M%S)
+  target="$BACKUP_DIR/backup_${stamp}_$3"
+  tmp="$BACKUP_DIR/.partial_$stamp"
+  mkdir -p "$tmp"
+  trap "rm -rf $(printf %q "$tmp")" EXIT
   log "Creating and downloading DB snapshot"
-  remote_snapshot "$1" "$2" >"$tmp"
-  verify_sqlite "$tmp"
+  remote_snapshot "$1" "$2" >"$tmp/db.sqlite3"
+  verify_sqlite "$tmp/db.sqlite3"
+  log "Downloading ${FILE_DIRS[*]}"
+  remote_files "$1" "${FILE_DIRS[@]}" >"$tmp/files.tar"
+  if [[ -s $tmp/files.tar ]]; then tar -xf "$tmp/files.tar" -C "$tmp"; fi
+  rm "$tmp/files.tar"
   mv "$tmp" "$target"
-  log "Saved $target ($(du -h "$target" | cut -f1))"
+  log "Saved $target ($(du -sh "$target" | cut -f1))"
   echo "$target"
 }
 
@@ -159,15 +182,20 @@ ensure_local_cert() {
   fi
 }
 
-# Swap the backup in with the local instance stopped, then (re)start it; `up`
+# Swap backup dir $1 in with the local instance stopped, then (re)start it; `up`
 # also recreates the container when update_local_compose changed the image.
 run_local_instance() {
   log "Stopping local vaultwarden"
   local_compose stop
   mkdir -p "$LOCAL_DATA_DIR"
   rm -f "$LOCAL_DATA_DIR/db.sqlite3-wal" "$LOCAL_DATA_DIR/db.sqlite3-shm"
-  cp "$1" "$LOCAL_DATA_DIR/db.sqlite3"
-  log "Copied to $LOCAL_DATA_DIR/db.sqlite3"
+  cp "$1/db.sqlite3" "$LOCAL_DATA_DIR/db.sqlite3"
+  local d
+  for d in "${FILE_DIRS[@]}"; do
+    rm -rf "${LOCAL_DATA_DIR:?}/$d"
+    if [[ -d $1/$d ]]; then cp -a "$1/$d" "$LOCAL_DATA_DIR/$d"; fi
+  done
+  log "Copied $1 to $LOCAL_DATA_DIR/"
   log "Starting local vaultwarden"
   local_compose up -d --wait
 }
@@ -187,10 +215,11 @@ print_summary() {
 rotate_backups() {
   local backups old
   shopt -s nullglob
-  backups=("$BACKUP_DIR"/db_*.sqlite3)
+  backups=("$BACKUP_DIR"/backup_*/)
   ((${#backups[@]} > KEEP)) || return 0
   for old in "${backups[@]:0:${#backups[@]}-KEEP}"; do
-    rm -f "$old"
+    old=${old%/}
+    rm -rf "$old"
     log "Deleted old backup $old"
   done
 }
